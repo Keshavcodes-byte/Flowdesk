@@ -272,13 +272,19 @@ Workflow JSON configuration accepts only these fields:
   "query_params": {"account_id": "A-102", "active": true},
   "timeout_seconds": 10,
   "max_response_bytes": 262144,
-  "token_env": "FLOWDESK_API_TOKEN"
+  "credential_id": "billing-api"
 }
 ```
 
 `endpoint` is required and must use HTTPS on port 443, without embedded credentials, query, or fragment. `query_params` is optional, supports at most 50 names and 100 expanded values, and accepts scalar strings, finite numbers, booleans, or arrays of those values. `timeout_seconds` defaults to 10 and must be from 0.1 through 20. `max_response_bytes` defaults to 262144 and must be from 1024 through 1048576. Only JSON media types (`application/json` and `application/*+json`) are accepted; malformed JSON, oversized responses, redirects, non-2xx statuses, timeouts, and connection errors fail the step with safe summaries. Automatic retries are not performed.
 
-For bearer authentication, set the token in the server process environment and configure only its environment-variable name in `token_env` (matching `^[A-Z_][A-Z0-9_]{0,127}$`). Never enter the token value in the dashboard or workflow JSON. Flowdesk resolves the destination host before connecting, rejects every non-public resolved address, pins the HTTPS connection to the checked public IP, verifies TLS against the hostname, and does not follow redirects. This blocks local/private, loopback, link-local, multicast, unspecified, and other non-global destinations, including redirect-based access. The request uses no proxy settings or caller-provided headers. Treat returned API data as untrusted.
+For bearer authentication, the workflow supplies only a server-defined `credential_id`; it cannot name or read environment variables. Administrators configure credentials in `FLOWDESK_API_CREDENTIALS_JSON`, passed to both Compose services from an untracked deployment environment or secret manager. Its value is a JSON object keyed by credential ID; every entry must contain exactly an HTTPS origin and token, for example (the token below is a placeholder, not a credential):
+
+```json
+{"billing-api":{"origin":"https://api.example.com","token":"REPLACE_WITH_A_SECRET_FROM_YOUR_SECRET_MANAGER"}}
+```
+
+Origins must use HTTPS on port 443 and contain no path except an optional trailing slash. Matching normalizes scheme/hostname case and the default port, then requires exact origin equality; subdomains and suffix lookalikes do not match. A credential is sent only when the requested endpoint has the configured origin. Missing IDs, origin mismatches, or malformed credential JSON fail before DNS resolution or network transport. Never put actual tokens in workflow JSON, tracked Compose files, source control, logs, or execution history. Prefer a deployment secret manager; Compose environment values are visible to Docker administrators. Flowdesk resolves the destination host before connecting, rejects every non-public resolved address, pins the HTTPS connection to the checked public IP, verifies TLS against the hostname, and does not follow redirects. This blocks local/private, loopback, link-local, multicast, unspecified, and other non-global destinations, including redirect-based access. The request uses no proxy settings or caller-provided headers. Treat returned API data as untrusted.
 
 API-step workflow example (the URLs are placeholders and are not contacted by tests):
 

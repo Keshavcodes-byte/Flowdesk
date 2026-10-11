@@ -28,8 +28,12 @@ MAX_API_TIMEOUT_SECONDS = 20.0
 DNS_RESOLUTION_TIMEOUT_SECONDS = 3.0
 MAX_PENDING_DNS_LOOKUPS = 4
 _DNS_LOOKUP_SLOTS = BoundedSemaphore(MAX_PENDING_DNS_LOOKUPS)
-_ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
+_CREDENTIAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _SAFE_HOST = re.compile(r"^[a-zA-Z0-9.-]+$")
+API_CREDENTIALS_ENV = "FLOWDESK_API_CREDENTIALS_JSON"
+MAX_API_CREDENTIALS_JSON_BYTES = 64 * 1024
+MAX_API_CREDENTIALS = 32
+MAX_API_CREDENTIAL_BYTES = 4096
 
 
 class APIRequestFailure(RuntimeError):
@@ -84,8 +88,62 @@ def _validate_query_params(value: object, label: str = "query_params") -> dict[s
     return result
 
 
+def _strict_credential_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate credential configuration property")
+        result[key] = value
+    return result
+
+
+def _normalized_origin(value: object) -> str:
+    if not isinstance(value, str) or not value or len(value) > 2048:
+        raise ValueError("origin must be an HTTPS origin.")
+    _, hostname, _, _ = _validate_endpoint(value)
+    parts = urlsplit(value)
+    if parts.path not in {"", "/"}:
+        raise ValueError("origin must not include a path.")
+    normalized_host = hostname.lower().rstrip(".")
+    if not normalized_host:
+        raise ValueError("origin hostname is invalid.")
+    return "https://" + normalized_host
+
+
+def _endpoint_origin(endpoint: str) -> str:
+    _, hostname, _, _ = _validate_endpoint(endpoint)
+    return "https://" + hostname.lower().rstrip(".")
+
+
+def _load_api_credentials() -> dict[str, dict[str, str]]:
+    raw = os.environ.get(API_CREDENTIALS_ENV, "")
+    if not raw.strip():
+        return {}
+    try:
+        if len(raw.encode("utf-8")) > MAX_API_CREDENTIALS_JSON_BYTES:
+            raise ValueError("configuration exceeds size limit")
+        document = json.loads(raw, object_pairs_hook=_strict_credential_object, parse_constant=_reject_json_constant)
+        if not isinstance(document, dict) or len(document) > MAX_API_CREDENTIALS:
+            raise ValueError("configuration must be an object with at most 32 credentials")
+        credentials: dict[str, dict[str, str]] = {}
+        for credential_id, item in document.items():
+            if not isinstance(credential_id, str) or not _CREDENTIAL_ID.fullmatch(credential_id):
+                raise ValueError("invalid credential id")
+            if not isinstance(item, dict) or set(item) != {"origin", "token"}:
+                raise ValueError("credential entries must contain only origin and token")
+            origin = _normalized_origin(item["origin"])
+            token = item["token"]
+            if (not isinstance(token, str) or not 1 <= len(token) <= MAX_API_CREDENTIAL_BYTES
+                    or not token.isascii() or any(ord(character) <= 32 or ord(character) == 127 for character in token)):
+                raise ValueError("credential token is invalid")
+            credentials[credential_id] = {"origin": origin, "token": token}
+        return credentials
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise APIRequestFailure("api_credentials_invalid", "Server API credential configuration is invalid.") from None
+
+
 def _validate_config(config: Mapping[str, object]) -> dict[str, object]:
-    allowed = {"endpoint", "query_params", "timeout_seconds", "max_response_bytes", "token_env"}
+    allowed = {"endpoint", "query_params", "timeout_seconds", "max_response_bytes", "credential_id"}
     if set(config) - allowed:
         raise ValueError("api_request config contains unsupported fields.")
     endpoint = config.get("endpoint")
@@ -97,11 +155,11 @@ def _validate_config(config: Mapping[str, object]) -> dict[str, object]:
     limit = config.get("max_response_bytes", DEFAULT_API_RESPONSE_BYTES)
     if type(limit) is not int or not 1024 <= limit <= MAX_API_RESPONSE_BYTES:
         raise ValueError("max_response_bytes must be between 1024 and 1048576.")
-    token_env = config.get("token_env")
-    if token_env is not None and (not isinstance(token_env, str) or not _ENV_NAME.fullmatch(token_env)):
-        raise ValueError("token_env must be a valid uppercase environment-variable name.")
+    credential_id = config.get("credential_id")
+    if credential_id is not None and (not isinstance(credential_id, str) or not _CREDENTIAL_ID.fullmatch(credential_id)):
+        raise ValueError("credential_id must be a valid 1 to 64 character identifier.")
     return {"endpoint": endpoint, "query_params": params, "timeout_seconds": float(timeout),
-            "max_response_bytes": limit, "token_env": token_env}
+            "max_response_bytes": limit, "credential_id": credential_id}
 
 
 def _resolve_public_ip(hostname: str, port: int) -> str:
@@ -264,10 +322,16 @@ class APIRequestStepHandler:
             except ValueError as error:
                 raise WorkflowInputError(str(error), "invalid_api_request") from error
         params = _validate_query_params(params)
-        token_name = config["token_env"]
-        token = os.environ.get(token_name) if token_name else None
-        if token_name and not token:
-            raise WorkflowInputError("The configured API token environment variable is unavailable.", "missing_api_token")
+        credentials = _load_api_credentials()
+        token = None
+        credential_id = config["credential_id"]
+        if credential_id is not None:
+            credential = credentials.get(credential_id)
+            if credential is None:
+                raise WorkflowInputError("The configured API credential is unavailable.", "api_credential_unavailable")
+            if credential["origin"] != _endpoint_origin(config["endpoint"]):
+                raise WorkflowInputError("The configured API credential is not approved for this HTTPS origin.", "api_credential_origin_mismatch")
+            token = credential["token"]
         _, hostname, port, _ = _validate_endpoint(config["endpoint"])
         checked_address = _resolve_public_ip(hostname, port)
         started = time.perf_counter()

@@ -202,7 +202,7 @@ def test_dashboard_and_static_assets_are_served_without_shadowing_api_docs(
     assert 'id="add-calculation"' in dashboard.text
     assert 'id="api-request-enabled"' in dashboard.text
     assert 'id="api-request-endpoint"' in dashboard.text
-    assert 'id="api-request-token-env"' in dashboard.text
+    assert 'id="api-request-credential-id"' in dashboard.text
     assert 'id="api-request-timeout"' in dashboard.text
     assert 'id="api-request-limit"' in dashboard.text
     assert 'id="add-api-query"' in dashboard.text
@@ -219,7 +219,9 @@ def test_dashboard_and_static_assets_are_served_without_shadowing_api_docs(
     assert 'if (apiRequestEnabled.checked)' in script.text
     assert 'type: "api_request"' in script.text
     assert 'query_params: queryParams' in script.text
-    assert 'config.token_env = tokenEnv' in script.text
+    assert 'config.credential_id = credentialId' in script.text
+    assert 'apiRequestCredentialId.value.trim()' in script.text
+    assert 'token_env' not in script.text
     assert 'new URL(endpoint)' in script.text
     assert 'function addApiQueryRow()' in script.text
     ruleset_submission = script.text.split("async function buildAutomationFormData(file)", 1)[1].split(

@@ -220,8 +220,8 @@
                   <label for="api-request-endpoint">HTTPS endpoint
                     <input id="api-request-endpoint" type="url" maxlength="2048" placeholder="https://api.example.com/v1/status" autocomplete="url" disabled>
                   </label>
-                  <label for="api-request-token-env">Token environment variable <span>(optional)</span>
-                    <input id="api-request-token-env" type="text" maxlength="128" placeholder="FLOWDESK_API_TOKEN" autocomplete="off" disabled>
+                  <label for="api-request-credential-id">Administrator API credential ID <span>(optional)</span>
+                    <input id="api-request-credential-id" type="text" maxlength="64" placeholder="billing-api" autocomplete="off" disabled>
                   </label>
                   <div class="api-selects">
                     <label for="api-request-timeout">Timeout
@@ -235,7 +235,7 @@
                     <div class="transform-editor-heading"><div><strong>Query parameters</strong><small>Values are sent with the GET request and are not written to execution history.</small></div><button class="button button-secondary" id="add-api-query" type="button" disabled>Add parameter</button></div>
                     <div class="transform-rows" id="api-query-rows"></div>
                   </div>
-                  <p class="rules-help" id="api-request-help">Only configured query parameters are sent; the uploaded spreadsheet is not forwarded. Only public HTTPS destinations on port 443 are allowed, and local/private IPs and redirects are blocked. Enter an environment-variable name for a bearer token; never enter a token value here.</p>
+                  <p class="rules-help" id="api-request-help">Only configured query parameters are sent; the uploaded spreadsheet is not forwarded. Only public HTTPS destinations on port 443 are allowed, and local/private IPs and redirects are blocked. Select a credential ID configured by the administrator for this exact HTTPS origin. Never enter a token or secret value here.</p>
                 </div>
               </fieldset>
               <p class="rules-help">This builder creates the workflow definition for you. Transformations apply only to rows that pass file-integrity and selected business rules; rejected source rows and values remain in the validation report. With no ruleset selected, only file-integrity checks run.</p>

@@ -28,7 +28,7 @@ const automationRuleset = document.querySelector("#automation-ruleset");
 const apiRequestEnabled = document.querySelector("#api-request-enabled");
 const apiRequestOptions = document.querySelector("#api-request-options");
 const apiRequestEndpoint = document.querySelector("#api-request-endpoint");
-const apiRequestTokenEnv = document.querySelector("#api-request-token-env");
+const apiRequestCredentialId = document.querySelector("#api-request-credential-id");
 const apiRequestTimeout = document.querySelector("#api-request-timeout");
 const apiRequestLimit = document.querySelector("#api-request-limit");
 const apiQueryRows = document.querySelector("#api-query-rows");
@@ -581,9 +581,9 @@ function buildAutomationWorkflow() {
     if (parsedEndpoint.protocol !== "https:" || (parsedEndpoint.port && parsedEndpoint.port !== "443") || parsedEndpoint.username || parsedEndpoint.password || parsedEndpoint.search || parsedEndpoint.hash) {
       throw new Error("Use an HTTPS endpoint on port 443 without credentials, query, or fragment.");
     }
-    const tokenEnv = apiRequestTokenEnv.value.trim();
-    if (tokenEnv && !/^[A-Z_][A-Z0-9_]{0,127}$/.test(tokenEnv)) {
-      throw new Error("Token environment variable must use uppercase letters, digits, and underscores.");
+    const credentialId = apiRequestCredentialId.value.trim();
+    if (credentialId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(credentialId)) {
+      throw new Error("Credential ID must be a valid 1 to 64 character identifier.");
     }
     const queryParams = {};
     for (const row of apiQueryRows.querySelectorAll(".api-query-row")) {
@@ -601,7 +601,7 @@ function buildAutomationWorkflow() {
       timeout_seconds: Number(apiRequestTimeout.value),
       max_response_bytes: Number(apiRequestLimit.value),
     };
-    if (tokenEnv) config.token_env = tokenEnv;
+    if (credentialId) config.credential_id = credentialId;
     steps.push({ id: "api-request", type: "api_request", config });
   }
   if (emailDeliveryEnabled.checked) {

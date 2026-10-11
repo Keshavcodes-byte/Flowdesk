@@ -52,21 +52,21 @@ def _run(handler, definition):
     return record
 
 
-def test_json_get_returns_bounded_json_and_uses_query_parameters_and_env_token(monkeypatch):
+def test_json_get_uses_server_credential_bound_to_exact_origin(monkeypatch):
     calls = []
 
     def requester(endpoint, params, timeout, max_bytes, token, checked_address):
         calls.append((endpoint, params, timeout, max_bytes, token, checked_address))
         return 200, "application/json; charset=utf-8", b'{"items":[1,2]}'
 
-    monkeypatch.setenv("FLOWDESK_TEST_TOKEN", "secret-api-token")
+    monkeypatch.setenv("FLOWDESK_API_CREDENTIALS_JSON", json.dumps({"test-api": {"origin": "HTTPS://API.EXAMPLE.TEST:443/", "token": "secret-api-token"}}))
     handler = APIRequestStepHandler(requester)
     config = {
         "endpoint": "https://api.example.test/v1/items",
         "query_params": {"page": 2, "active": True},
         "timeout_seconds": 5,
         "max_response_bytes": 4096,
-        "token_env": "FLOWDESK_TEST_TOKEN",
+        "credential_id": "test-api",
     }
     record = _run(handler, _step(config))
 
@@ -78,13 +78,13 @@ def test_json_get_returns_bounded_json_and_uses_query_parameters_and_env_token(m
 
 
 def test_token_value_echoed_by_external_json_is_redacted(monkeypatch):
-    monkeypatch.setenv("FLOWDESK_TEST_TOKEN", "secret-api-token")
+    monkeypatch.setenv("FLOWDESK_API_CREDENTIALS_JSON", json.dumps({"test-api": {"origin": "HTTPS://API.EXAMPLE.TEST:443/", "token": "secret-api-token"}}))
     handler = APIRequestStepHandler(lambda *_: (
         200, "application/json", b'{"token":"secret-api-token"}'
     ))
     record = _run(handler, _step({
         "endpoint": "https://api.example.test",
-        "token_env": "FLOWDESK_TEST_TOKEN",
+        "credential_id": "test-api",
     }))
     assert record.status is ExecutionStatus.SUCCEEDED
     assert record.output["outputs"]["fetch"]["response"] == {"token": "[REDACTED]"}
@@ -98,7 +98,7 @@ def test_token_value_echoed_by_external_json_is_redacted(monkeypatch):
     {"endpoint": "https://api.example.test", "unexpected": 1},
     {"endpoint": "https://api.example.test", "timeout_seconds": 30},
     {"endpoint": "https://api.example.test", "max_response_bytes": 10},
-    {"endpoint": "https://api.example.test", "token_env": "bad-name"},
+    {"endpoint": "https://api.example.test", "credential_id": "bad name"},
     {"endpoint": "https://api.example.test", "query_params": {"x": {"nested": 1}}},
 ])
 def test_invalid_api_configuration_is_rejected(config):
@@ -130,11 +130,11 @@ def test_timeout_fails_workflow_and_does_not_log_secret_or_request_details(caplo
         raise TimeoutError("secret-api-token https://private.example/path?customer=secret")
 
     handler = APIRequestStepHandler(timeout)
-    monkeypatch.setenv("FLOWDESK_TEST_TOKEN", "secret-api-token")
+    monkeypatch.setenv("FLOWDESK_API_CREDENTIALS_JSON", json.dumps({"test-api": {"origin": "HTTPS://API.EXAMPLE.TEST:443/", "token": "secret-api-token"}}))
     definition = _step({
         "endpoint": "https://api.example.test/private-path",
         "query_params": {"customer": "private-customer"},
-        "token_env": "FLOWDESK_TEST_TOKEN",
+        "credential_id": "test-api",
     })
     with caplog.at_level(logging.INFO, logger="app.engine"):
         record = _run(handler, definition)
@@ -142,6 +142,57 @@ def test_timeout_fails_workflow_and_does_not_log_secret_or_request_details(caplo
     assert record.step_results[0]["error"]["code"] == "api_timeout"
     for private_value in ("secret-api-token", "private-customer", "private-path"):
         assert private_value not in caplog.text
+
+
+@pytest.mark.parametrize("environment_name", ["FLOWDESK_SMTP_PASSWORD", "SOME_UNRELATED_SECRET"])
+def test_workflow_cannot_select_arbitrary_environment_variables(environment_name, monkeypatch):
+    from app.engine.automation import parse_workflow_definition
+
+    monkeypatch.setenv(environment_name, "must-not-be-read")
+    definition = _step({"endpoint": "https://api.example.test", "token_env": environment_name})
+    with pytest.raises(WorkflowDefinitionError, match="unsupported fields"):
+        parse_workflow_definition(json.dumps(definition), {"api_request": APIRequestStepHandler(lambda *_: None)})
+    calls = []
+    monkeypatch.setenv("FLOWDESK_API_CREDENTIALS_JSON", "{}")
+    record = _run(APIRequestStepHandler(lambda *args: (calls.append(args) or (200, "application/json", b"{}"))),
+                  _step({"endpoint": "https://api.example.test", "credential_id": environment_name}))
+    assert record.status is ExecutionStatus.FAILED
+    assert record.step_results[0]["error"]["code"] == "api_credential_unavailable"
+    assert calls == []
+
+
+def test_credential_is_never_sent_to_unapproved_origin(monkeypatch):
+    monkeypatch.setenv("FLOWDESK_API_CREDENTIALS_JSON", json.dumps({"billing": {"origin": "https://api.example.test", "token": "private-placeholder-token"}}))
+    calls = []
+    record = _run(APIRequestStepHandler(lambda *args: (calls.append(args) or (200, "application/json", b"{}"))),
+                  _step({"endpoint": "https://attacker.example.test/v1", "credential_id": "billing"}))
+    assert record.status is ExecutionStatus.FAILED
+    assert record.step_results[0]["error"]["code"] == "api_credential_origin_mismatch"
+    assert calls == []
+
+
+@pytest.mark.parametrize("endpoint", ["https://api.example.test.attacker.test/v1", "https://evilapi.example.test/v1"])
+def test_credential_origin_match_is_exact_not_suffix_based(endpoint, monkeypatch):
+    monkeypatch.setenv("FLOWDESK_API_CREDENTIALS_JSON", json.dumps({"billing": {"origin": "https://api.example.test", "token": "private-placeholder-token"}}))
+    calls = []
+    record = _run(APIRequestStepHandler(lambda *args: (calls.append(args) or (200, "application/json", b"{}"))),
+                  _step({"endpoint": endpoint, "credential_id": "billing"}))
+    assert record.status is ExecutionStatus.FAILED
+    assert record.step_results[0]["error"]["code"] == "api_credential_origin_mismatch"
+    assert calls == []
+
+
+def test_malformed_api_credential_configuration_fails_safely_before_request(monkeypatch):
+    secret = "private-placeholder-token"
+    monkeypatch.setenv("FLOWDESK_API_CREDENTIALS_JSON", '{"billing":{"origin":"https://api.example.test","token":"' + secret + '"},}')
+    calls = []
+    record = _run(APIRequestStepHandler(lambda *args: (calls.append(args) or (200, "application/json", b"{}"))),
+                  _step({"endpoint": "https://api.example.test", "credential_id": "billing"}))
+    assert record.status is ExecutionStatus.FAILED
+    assert record.step_results[0]["error"]["code"] == "api_credentials_invalid"
+    assert record.step_results[0]["error"]["message"] == "Server API credential configuration is invalid."
+    assert secret not in json.dumps(record.step_results)
+    assert calls == []
 
 
 def test_private_ip_destination_is_blocked_before_request():
@@ -251,13 +302,13 @@ def test_api_step_is_registered_and_persisted_history_omits_response_body(client
 
     assert "api_request" in routes._automation_handlers()
     secret_response = {"account": "private-result-value"}
-    monkeypatch.setenv("FLOWDESK_TEST_TOKEN", "private-token-value")
+    monkeypatch.setenv("FLOWDESK_API_CREDENTIALS_JSON", json.dumps({"test-api": {"origin": "https://api.example.test", "token": "private-token-value"}}))
     handler = APIRequestStepHandler(lambda *_: (200, "application/json", json.dumps(secret_response).encode()))
     monkeypatch.setattr(routes, "_automation_handlers", lambda: {"api_request": handler})
     configured = _step({
         "endpoint": "https://api.example.test/private-endpoint",
         "query_params": {"customer": "private-query-value"},
-        "token_env": "FLOWDESK_TEST_TOKEN",
+        "credential_id": "test-api",
     })
     response = client.post(
         "/automation/execute",
@@ -273,7 +324,7 @@ def test_api_step_is_registered_and_persisted_history_omits_response_body(client
     serialized = json.dumps({"output": persisted["output"], "steps": persisted["steps"]})
     for private_value in (
         "private-result-value", "private-endpoint", "private-query-value", "private-token-value",
-        "FLOWDESK_TEST_TOKEN", "api.example.test",
+        "FLOWDESK_API_CREDENTIALS_JSON", "api.example.test",
     ):
         assert private_value not in serialized
     assert "response_bytes" in serialized

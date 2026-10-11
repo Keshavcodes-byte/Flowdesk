@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "automation-ai-platform"
+version = "0.1.0"
+description = "CSV-to-SQLite automation workflow exposed through FastAPI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "apscheduler>=3.11,<4.0",
+    "openpyxl>=3.1,<4.0",
+    "pandas>=2.2,<4.0",
+    "python-multipart>=0.0.20,<1.0",
+    "reportlab>=4.2,<6.0",
+    "uvicorn[standard]>=0.34,<1.0",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.28,<1.0",
+    "pytest>=8.3,<10.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

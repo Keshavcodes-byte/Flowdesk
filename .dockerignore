@@ -1,0 +1,12 @@
+.venv/
+**/__pycache__/
+.pytest_cache/
+.git/
+.env
+.env.*
+*.sqlite
+*.sqlite3
+*.db
+data/
+automation_ai_platform.egg-info/
+tests/

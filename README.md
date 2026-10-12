@@ -13,7 +13,7 @@ From this folder, create the local environment and install the project with its 
 
 ```powershell
 py -3.14 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e "[dev]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
 For another supported Python version, replace `-3.14` with that version. The environment and installed packages stay inside this project.
@@ -172,7 +172,7 @@ Schedules and queued workflows retain validated workflow/rules configuration and
 
 ### Security boundary and health checks
 
-By default the app permits loopback/local access only. Remote requests require `FLOWDESK_REMOTE_ACCESS_TOKEN` with at least 32 characters, a matching `Authorization: Bearer ...` header, and an HTTPS request as seen by the application. Behind a reverse proxy, set `FLOWDESK_TRUSTED_PROXY_CIDRS` to exact proxy source addresses and configure the proxy to replace caller-provided `X-Forwarded-For` with one validated client IP and set `X-Forwarded-Proto` from the TLS connection. Only those proxy peers' forwarded headers are trusted. The proxy must also require HTTPS externally. `FLOWDESK_TRUSTED_CLIENT_CIDRS` is a separate explicit network trust exception and should be set only for a tightly controlled network. Do not publish the unauthenticated local dashboard to the public internet. `/healthz` is a liveness check; `/readyz` checks SQLite availability.
+By default the app permits loopback/local access only. Remote requests require `FLOWDESK_REMOTE_ACCESS_TOKEN` with at least 32 characters, a matching `Authorization: Bearer ...` header, and an HTTPS request as seen by the application. Configure `FLOWDESK_ALLOWED_HOSTS` as a comma-separated exact hostname allowlist (no wildcards); local hostnames are allowed by default. For a reverse proxy, include the public hostname here and configure the proxy to set the upstream `Host` to that hostname. Set `FLOWDESK_TRUSTED_PROXY_CIDRS` to the proxy source CIDRs and configure the proxy to replace caller-provided `X-Forwarded-For` with one validated client IP and set `X-Forwarded-Proto` from its TLS connection. Only those proxy peers' forwarded headers are trusted; `X-Forwarded-Host` is not used. The proxy must require HTTPS externally. Browser state-changing requests must have a same-origin `Origin` (and, when present, `Sec-Fetch-Site: same-origin`); non-browser API clients may omit these browser headers. `FLOWDESK_TRUSTED_CLIENT_CIDRS` is a separate explicit network trust exception and should be set only for a tightly controlled network. Do not publish the unauthenticated local dashboard to the public internet. `/healthz` is a liveness check; `/readyz` checks SQLite availability. The app rejects request bodies over 6 MiB before multipart parsing; individual business files remain limited to 5 MiB.
 
 ### Docker Compose
 
@@ -184,7 +184,7 @@ docker compose ps
 docker compose logs --tail 100 web worker
 ```
 
-Open `http://127.0.0.1:8000/`. Stop with `docker compose down` (the named data volume remains); `docker compose down -v` deletes persistent application data and should be avoided unless intentionally purging it. Back up the SQLite database and the complete output/queue directories together while Flowdesk is stopped, or use SQLite's online backup facility; restore them as a consistent set. Artifact metadata without its file, or vice versa, can cause missing downloads. Set SMTP/API secrets through the deployment environment/secret manager; never commit them in Compose files or `.env`.
+Open `http://127.0.0.1:8000/`. Stop with `docker compose down` (the named data volume remains); `docker compose down -v` deletes persistent application data and should be avoided unless intentionally purging it. A consistent backup must include the SQLite database plus the complete `outputs/` and `queue/` directories: an SQLite online backup captures database pages only, not those files. Safest procedure: stop both web and worker (`docker compose stop web worker`), copy the complete `/app/data` volume as one set (the SQLite database, any `-wal`/`-shm` sidecars, and both directories), then restart services. If using SQLite online backup while services remain available, first quiesce operations that create/update jobs, artifacts, queue entries, or schedules and take a coordinated filesystem/volume snapshot of `outputs/` and `queue/` at the same logical point; SQLite backup alone is not a complete Flowdesk backup. Before restoring, stop services, restore the database and directories together, verify every registered artifact exists and queued/scheduled input references resolve inside the restored queue directory, then start services and check `/readyz`, job history, and artifact downloads. Artifact metadata without its file, or vice versa, can cause missing downloads. Set SMTP/API secrets through the deployment environment/secret manager; never commit them in Compose files or `.env`.
 
 ### Continuous integration
 

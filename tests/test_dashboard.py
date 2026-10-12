@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 
 import httpx
@@ -24,6 +25,7 @@ def test_health_endpoints_and_remote_access_boundary(client: TestClient, monkeyp
         async with httpx.AsyncClient(transport=transport, base_url=url) as remote:
             return await remote.get("/healthz", headers=headers)
 
+    monkeypatch.setenv("FLOWDESK_ALLOWED_HOSTS", "flowdesk.example")
     monkeypatch.delenv("FLOWDESK_REMOTE_ACCESS_TOKEN", raising=False)
     denied = asyncio.run(remote_get("https://flowdesk.example"))
     assert denied.status_code == 403
@@ -67,13 +69,13 @@ def test_health_endpoints_and_remote_access_boundary(client: TestClient, monkeyp
     # attempt the IPv6-only ipv4_mapped property.
     ipv4_loopback_transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async def ipv4_loopback_get():
-        async with httpx.AsyncClient(transport=ipv4_loopback_transport, base_url="http://flowdesk.local") as local_client:
+        async with httpx.AsyncClient(transport=ipv4_loopback_transport, base_url="http://localhost") as local_client:
             return await local_client.get("/healthz")
     assert asyncio.run(ipv4_loopback_get()).status_code == 200
 
     ipv6_loopback_transport = httpx.ASGITransport(app=app, client=("::1", 12345))
     async def ipv6_loopback_get():
-        async with httpx.AsyncClient(transport=ipv6_loopback_transport, base_url="http://flowdesk.local") as local_client:
+        async with httpx.AsyncClient(transport=ipv6_loopback_transport, base_url="http://localhost") as local_client:
             return await local_client.get("/healthz")
     assert asyncio.run(ipv6_loopback_get()).status_code == 200
 
@@ -249,3 +251,69 @@ def test_dashboard_and_static_assets_are_served_without_shadowing_api_docs(
     assert "if (isUploading) return;" in script.text
     assert client.get("/docs").status_code == 200
     assert client.get("/openapi.json").status_code == 200
+
+
+def test_host_and_browser_origin_policy_preserves_local_api_clients(client: TestClient):
+    hostile_host = client.get("/healthz", headers={"Host": "attacker.example"})
+    spoofed_host = client.get(
+        "/healthz",
+        headers={"Host": "attacker.example", "X-Forwarded-Host": "testserver"},
+    )
+    assert hostile_host.status_code == 400
+    assert spoofed_host.status_code == 400
+
+    valid_config = json.dumps({
+        "schema_version": 1,
+        "ruleset_id": "origin-check",
+        "version": "1",
+        "rules": [{"id": "required", "type": "required", "column": "Customer"}],
+    })
+    same_origin = client.post(
+        "/rulesets",
+        headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"},
+        json={"name": "Local", "configuration": valid_config},
+    )
+    hostile_origin = client.post(
+        "/rulesets",
+        headers={"Origin": "https://attacker.example"},
+        json={"name": "Blocked", "configuration": valid_config.replace("origin-check", "hostile-origin")},
+    )
+    # Scripted/API clients without browser-origin headers remain supported.
+    no_origin = client.post(
+        "/rulesets",
+        json={"name": "API client", "configuration": valid_config.replace("origin-check", "api-client")},
+    )
+    assert same_origin.status_code == 201
+    assert hostile_origin.status_code == 403
+    assert no_origin.status_code == 201
+
+
+def test_origin_scheme_uses_forwarded_proto_only_from_trusted_proxy(client: TestClient, monkeypatch):
+    monkeypatch.setenv("FLOWDESK_ALLOWED_HOSTS", "flowdesk.example")
+    monkeypatch.setenv("FLOWDESK_TRUSTED_PROXY_CIDRS", "127.0.0.0/8")
+    token = "t" * 48
+    monkeypatch.setenv("FLOWDESK_REMOTE_ACCESS_TOKEN", token)
+
+    async def send_request(peer, ruleset_id):
+        transport = httpx.ASGITransport(app=app, client=(peer, 12345))
+        headers = {
+            "Host": "flowdesk.example",
+            "Origin": "https://flowdesk.example",
+            "X-Forwarded-For": "198.51.100.77",
+            "X-Forwarded-Proto": "https",
+            "Authorization": f"Bearer {token}",
+        }
+        configuration = json.dumps({
+            "schema_version": 1,
+            "ruleset_id": ruleset_id,
+            "version": "1",
+            "rules": [{"id": "required", "type": "required", "column": "Customer"}],
+        })
+        async with httpx.AsyncClient(transport=transport, base_url="http://flowdesk.example") as remote:
+            return await remote.post("/rulesets", headers=headers, json={"name": "Proxy", "configuration": configuration})
+
+    trusted = asyncio.run(send_request("127.0.0.2", "trusted-origin"))
+    untrusted = asyncio.run(send_request("198.51.100.20", "untrusted-origin"))
+
+    assert trusted.status_code == 201
+    assert untrusted.status_code == 403

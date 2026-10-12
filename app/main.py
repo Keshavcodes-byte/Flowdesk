@@ -30,7 +30,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Automation AI Platform",
     description="CSV-to-SQLite import workflow",
-    version="0.1.0",
+    version="1.0.0",
     lifespan=lifespan,
 )
 app.include_router(router)

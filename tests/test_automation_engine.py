@@ -357,3 +357,36 @@ def test_automation_api_malformed_rules_finalizes_failed_execution(client: TestC
 
 def test_missing_execution_record_returns_404(client: TestClient):
     assert client.get("/executions/missing-execution").status_code == 404
+
+
+def test_legacy_token_env_api_workflow_fails_safely_with_migration_guidance(client: TestClient):
+    definition = json.dumps({
+        "workflow_id": "legacy-token-env",
+        "version": "1",
+        "steps": [{
+            "id": "lookup",
+            "type": "api_request",
+            "config": {
+                "endpoint": "https://api.example.test/v1/status",
+                "token_env": "FLOWDESK_SMTP_PASSWORD",
+            },
+        }],
+    })
+    response = client.post(
+        "/automation/execute",
+        files={"file": ("staging.csv", "Customer\nQA\n", "text/csv")},
+        data={"workflow": definition},
+    )
+
+    assert response.status_code == 422
+    result = response.json()
+    message = result["error"]["message"]
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "invalid_workflow"
+    assert result["finished_at"] is not None
+    history = client.get(f"/executions/{result['execution_id']}").json()
+    assert history["error"]["message"] == message
+    assert "token_env is no longer supported" in message
+    assert "credential_id" in message
+    assert "FLOWDESK_API_CREDENTIALS_JSON" in message
+    assert "FLOWDESK_SMTP_PASSWORD" not in response.text

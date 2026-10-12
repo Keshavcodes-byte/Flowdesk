@@ -144,6 +144,11 @@ def _load_api_credentials() -> dict[str, dict[str, str]]:
 
 def _validate_config(config: Mapping[str, object]) -> dict[str, object]:
     allowed = {"endpoint", "query_params", "timeout_seconds", "max_response_bytes", "credential_id"}
+    if "token_env" in config:
+        raise ValueError(
+            "token_env is no longer supported; remove it and configure an administrator-managed "
+            "credential_id in FLOWDESK_API_CREDENTIALS_JSON for the approved HTTPS origin."
+        )
     if set(config) - allowed:
         raise ValueError("api_request config contains unsupported fields.")
     endpoint = config.get("endpoint")

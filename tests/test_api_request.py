@@ -150,8 +150,14 @@ def test_workflow_cannot_select_arbitrary_environment_variables(environment_name
 
     monkeypatch.setenv(environment_name, "must-not-be-read")
     definition = _step({"endpoint": "https://api.example.test", "token_env": environment_name})
-    with pytest.raises(WorkflowDefinitionError, match="unsupported fields"):
+    with pytest.raises(WorkflowDefinitionError) as error:
         parse_workflow_definition(json.dumps(definition), {"api_request": APIRequestStepHandler(lambda *_: None)})
+    message = str(error.value)
+    assert "token_env is no longer supported" in message
+    assert "credential_id" in message
+    assert "FLOWDESK_API_CREDENTIALS_JSON" in message
+    assert environment_name not in message
+    assert "must-not-be-read" not in message
     calls = []
     monkeypatch.setenv("FLOWDESK_API_CREDENTIALS_JSON", "{}")
     record = _run(APIRequestStepHandler(lambda *args: (calls.append(args) or (200, "application/json", b"{}"))),
